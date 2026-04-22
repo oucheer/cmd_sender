@@ -100,6 +100,15 @@ from typing import List, Dict, Optional, Tuple
 
 print("所有模块导入完成，开始定义类")
 
+# 尝试导入命令集管理模块
+try:
+    from modules.command_set_integration import CommandSetIntegration
+    COMMAND_SET_AVAILABLE = True
+    print("成功导入命令集管理模块")
+except ImportError as e:
+    COMMAND_SET_AVAILABLE = False
+    print(f"命令集模块导入失败: {e}")
+
 class WindowSelector:
     """窗口选择器，用于选择目标窗口"""
     
@@ -1828,6 +1837,16 @@ class CommandSenderApp:
         # 初始化变量
         self.serial_manager = SerialManager()
         self.config_manager = ConfigManager()
+        
+        # 初始化命令集管理集成
+        self.command_set_integration = None
+        if COMMAND_SET_AVAILABLE:
+            try:
+                self.command_set_integration = CommandSetIntegration(self)
+                print("命令集集成初始化成功")
+            except Exception as e:
+                print(f"命令集集成初始化失败: {e}")
+        
         self.current_file = None
         self.is_modified = False
         self.auto_save_timer = None
@@ -1913,9 +1932,9 @@ class CommandSenderApp:
         self.create_target_selection()
         print("目标选择区域创建完成")
         
-        # 创建宏记录和回放面板
-        self.create_macro_panel()
-        print("宏面板创建完成")
+        # 创建命令集面板
+        self.create_command_set_panel()
+        print("命令集面板创建完成")
         
         # 创建状态栏
         self.create_status_bar()
@@ -1967,7 +1986,22 @@ class CommandSenderApp:
         menubar.add_cascade(label="工具(T)", menu=tools_menu)
         tools_menu.add_command(label="刷新窗口列表", command=self.refresh_window_list)
         tools_menu.add_command(label="刷新串口列表", command=self.refresh_serial_list)
-        tools_menu.add_separator()
+        
+        # 命令集子菜单
+        if hasattr(self, 'command_set_integration') and self.command_set_integration:
+            commandset_menu = tk.Menu(tools_menu, tearoff=0)
+            tools_menu.add_cascade(label="命令集管理", menu=commandset_menu)
+            commandset_menu.add_command(label="保存选区为命令集", 
+                                        command=self.command_set_integration.save_selection_as_command_set)
+            commandset_menu.add_command(label="管理命令集", 
+                                        command=self.command_set_integration.manage_command_sets)
+            commandset_menu.add_separator()
+            commandset_menu.add_command(label="导出到桌面", 
+                                        command=self.command_set_integration.export_command_set_to_desktop)
+            commandset_menu.add_command(label="批量导出到桌面", 
+                                        command=self.command_set_integration.batch_export_to_desktop)
+            tools_menu.add_separator()
+        
         tools_menu.add_command(label="设置", command=self.show_settings)
         
         # 帮助菜单
@@ -2003,6 +2037,12 @@ class CommandSenderApp:
         ttk.Button(toolbar, text="发送当前行", command=self.send_current_line).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="发送选中文本", command=self.send_selected_text).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="发送全部内容", command=self.send_all_content).pack(side=tk.LEFT, padx=2)
+        
+        # 命令集按钮
+        if hasattr(self, 'command_set_integration') and self.command_set_integration:
+            ttk.Separator(toolbar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=5)
+            ttk.Button(toolbar, text="命令集", 
+                      command=self.command_set_integration.manage_command_sets).pack(side=tk.LEFT, padx=2)
     
     def create_send_options(self, parent):
         """创建发送选项面板"""
@@ -2188,50 +2228,136 @@ class CommandSenderApp:
     
 
     
-    def create_macro_panel(self):
-        """创建宏记录和回放面板（MobaXterm风格）"""
-        # 使用默认样式，避免过于复杂的自定义样式
-        macro_frame = ttk.LabelFrame(self.root, text="宏记录和回放")
-        macro_frame.pack(fill=tk.X, padx=5, pady=5)
+    def create_command_set_panel(self):
+        """创建命令集面板"""
+        cmdset_frame = ttk.LabelFrame(self.root, text="命令集")
+        cmdset_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # 初始化宏相关变量
-        self.is_recording = False
-        self.recorded_macro = []
-        self.recording_start_time = 0
-        
-        # 宏控制按钮
-        control_frame = ttk.Frame(macro_frame)
+        control_frame = ttk.Frame(cmdset_frame)
         control_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # 开始记录按钮
-        self.record_btn = ttk.Button(control_frame, text="开始记录", command=self.start_macro_recording)
-        self.record_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Label(control_frame, text="当前命令集:").pack(side=tk.LEFT, padx=5)
         
-        # 停止记录按钮
-        self.stop_btn = ttk.Button(control_frame, text="停止记录", command=self.stop_macro_recording, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.current_cmdset_var = tk.StringVar(value="未选择")
+        self.cmdset_combo = ttk.Combobox(control_frame, textvariable=self.current_cmdset_var, 
+                                         width=20, state='readonly')
+        self.cmdset_combo.pack(side=tk.LEFT, padx=5)
+        self.cmdset_combo.bind('<<ComboboxSelected>>', self.on_cmdset_selected)
         
-        # 回放宏按钮
-        self.play_btn = ttk.Button(control_frame, text="回放宏", command=self.play_macro, state=tk.DISABLED)
-        self.play_btn.pack(side=tk.LEFT, padx=5)
+        self.send_cmdset_btn = ttk.Button(control_frame, text="发送命令集", 
+                                          command=self.send_current_cmdset, state=tk.DISABLED)
+        self.send_cmdset_btn.pack(side=tk.LEFT, padx=5)
         
-        # 保存宏按钮
-        self.save_macro_btn = ttk.Button(control_frame, text="保存宏", command=self.save_macro, state=tk.DISABLED)
-        self.save_macro_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Button(control_frame, text="刷新", 
+                  command=self.refresh_cmdset_list).pack(side=tk.LEFT, padx=2)
         
-        # 加载宏按钮
-        self.load_macro_btn = ttk.Button(control_frame, text="加载宏", command=self.load_macro)
-        self.load_macro_btn.pack(side=tk.LEFT, padx=5)
+        ttk.Separator(control_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
         
-        # 宏名称输入
-        ttk.Label(control_frame, text="宏名称:").pack(side=tk.LEFT, padx=5)
-        self.macro_name_var = tk.StringVar(value="my_macro")
-        self.macro_name_entry = ttk.Entry(control_frame, textvariable=self.macro_name_var, width=20)
-        self.macro_name_entry.pack(side=tk.LEFT, padx=5)
+        self.save_cmdset_btn = ttk.Button(control_frame, text="保存命令集", 
+                                          command=self.quick_save_cmdset, state=tk.DISABLED)
+        self.save_cmdset_btn.pack(side=tk.LEFT, padx=5)
         
-        # 宏记录状态
-        self.recording_status_var = tk.StringVar(value="")
-        ttk.Label(control_frame, textvariable=self.recording_status_var, foreground="red").pack(side=tk.RIGHT, padx=5)
+        self.text_editor.bind('<<Selection>>', self.on_text_selection_changed)
+        self.text_editor.bind('<KeyRelease>', self.on_text_selection_changed)
+        
+        self.refresh_cmdset_list()
+    
+    def on_text_selection_changed(self, event=None):
+        """文本选中状态变化"""
+        try:
+            selected = self.text_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
+            has_selection = bool(selected and selected.strip())
+            if hasattr(self, 'save_cmdset_btn'):
+                self.save_cmdset_btn.config(state=tk.NORMAL if has_selection else tk.DISABLED)
+        except tk.TclError:
+            if hasattr(self, 'save_cmdset_btn'):
+                self.save_cmdset_btn.config(state=tk.DISABLED)
+    
+    def quick_save_cmdset(self):
+        """快速保存选中的命令为命令集"""
+        try:
+            selected_text = self.text_editor.get(tk.SEL_FIRST, tk.SEL_LAST)
+        except tk.TclError:
+            messagebox.showwarning("警告", "请先选择要保存的命令")
+            return
+        
+        if not selected_text or not selected_text.strip():
+            messagebox.showwarning("警告", "选区中没有内容")
+            return
+        
+        commands = [line.strip() for line in selected_text.split('\n') if line.strip()]
+        
+        if not commands:
+            messagebox.showwarning("警告", "选区中没有有效命令")
+            return
+        
+        dialog = tk.Toplevel(self.root)
+        dialog.title("保存命令集")
+        dialog.geometry("400x220")
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        ttk.Label(dialog, text="命令集名称:").pack(pady=(10, 0), padx=10, anchor=tk.W)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dialog, textvariable=name_var, width=40)
+        name_entry.pack(pady=5, padx=10, fill=tk.X)
+        name_entry.focus()
+        
+        ttk.Label(dialog, text="命令集描述:").pack(pady=(10, 0), padx=10, anchor=tk.W)
+        desc_text = tk.Text(dialog, height=3, width=40)
+        desc_text.pack(pady=5, padx=10, fill=tk.X)
+        
+        ttk.Label(dialog, text=f"将保存 {len(commands)} 条命令").pack(pady=5, padx=10)
+        
+        def save():
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("警告", "请输入命令集名称")
+                return
+            
+            description = desc_text.get("1.0", tk.END).strip()
+            
+            if hasattr(self, 'command_set_integration') and self.command_set_integration:
+                result = self.command_set_integration.command_set_manager.create_command_set(
+                    name, description, commands
+                )
+                
+                if result:
+                    messagebox.showinfo("成功", f"命令集 '{name}' 保存成功！")
+                    self.refresh_cmdset_list()
+                    dialog.destroy()
+                else:
+                    messagebox.showerror("错误", "保存命令集失败，可能名称已存在")
+            else:
+                messagebox.showerror("错误", "命令集管理器未初始化")
+        
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=10)
+        ttk.Button(btn_frame, text="保存", command=save).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=5)
+        
+        dialog.bind('<Return>', lambda e: save())
+        dialog.bind('<Escape>', lambda e: dialog.destroy())
+    
+    def refresh_cmdset_list(self):
+        """刷新命令集列表"""
+        if hasattr(self, 'command_set_integration') and self.command_set_integration:
+            cmd_sets = self.command_set_integration.command_set_manager.list_all()
+            names = [cs.name for cs in cmd_sets]
+            if hasattr(self, 'cmdset_combo'):
+                self.cmdset_combo['values'] = names
+    
+    def on_cmdset_selected(self, event=None):
+        """命令集选中事件"""
+        if hasattr(self, 'send_cmdset_btn'):
+            self.send_cmdset_btn.config(state=tk.NORMAL)
+    
+    def send_current_cmdset(self):
+        """发送当前选中的命令集"""
+        name = self.current_cmdset_var.get()
+        if name and name != "未选择":
+            if hasattr(self, 'command_set_integration') and self.command_set_integration:
+                self.command_set_integration.execute_command_set(name)
     
     def create_status_bar(self):
         """创建状态栏"""
@@ -3961,7 +4087,7 @@ class CommandSenderApp:
     def show_about(self):
         """显示关于对话框"""
         try:
-            about_text = """命令发送器 V0.1
+            about_text = """命令发送器 V0.2
 
 一个用于向终端窗口发送命令的工具。
 
@@ -3972,12 +4098,21 @@ class CommandSenderApp:
 • 支持最近文件
 • 支持自动保存
 • 支持SecureCRT风格的命令按钮
-• 支持MobaXterm风格的宏记录和回放
+• 支持命令集管理功能
+  - 保存选中命令为命令集
+  - 快速执行命令集
+  - 导出命令集到桌面或指定目录
+  - 支持批量导出
 
-版本号：V0.1
+版本号：V0.2
+更新内容：
+• 新增命令集管理功能
+• 支持命令行执行模式
+• 优化配置保存路径
+
 联系方式：jiefeng.ou001@pantum.local
 作者：jiefeng.ou001
-日期：2026-03-16"""
+日期：2026-04-21"""
             
             messagebox.showinfo("关于", about_text)
         except Exception as e:
@@ -4005,28 +4140,6 @@ class CommandSenderApp:
         except Exception as e:
             messagebox.showerror("错误", f"选择窗口失败: {e}")
             logger.error(f"选择窗口失败: {e}")
-            return False
-    
-    def execute_macro(self):
-        """执行宏命令"""
-        try:
-            # 检查是否有选中的宏
-            if not hasattr(self, 'selected_macro') or not self.selected_macro:
-                self.show_warning("请先选择要执行的宏")
-                return False
-            
-            # 执行宏命令
-            for command in self.selected_macro['commands']:
-                # 发送命令
-                self.execute_command(command)
-                time.sleep(0.5)  # 命令间延迟
-            
-            self.show_info(f"宏命令执行完成: {self.selected_macro['name']}")
-            logger.info(f"宏命令执行完成: {self.selected_macro['name']}")
-            return True
-        except Exception as e:
-            self.show_error(f"执行宏命令失败: {e}")
-            logger.error(f"执行宏命令失败: {e}")
             return False
     
     def show_error(self, message):
@@ -4144,15 +4257,28 @@ class CommandSenderApp:
             finally:
                 self.current_tooltip = None
     
-
     
-    def start_macro_recording(self):
-        """开始记录宏"""
-        if not keyboard:
-            messagebox.showwarning("警告", "缺少keyboard库，无法记录宏")
-            return
-        
-        self.is_recording = True
+    
+    def apply_font_settings(self, font_family, font_size):
+        """应用字体设置"""
+        try:
+            # 创建字体对象
+            custom_font = font.Font(family=font_family, size=font_size)
+            
+            # 应用到文本编辑器
+            self.text_editor.config(font=custom_font)
+            
+            # 应用到行号显示
+            self.line_numbers.config(font=custom_font)
+            
+            # 更新行号以适应新字体
+            self.update_line_numbers()
+            
+            logger.info(f"已应用字体设置: {font_family} {font_size}")
+        except Exception as e:
+            logger.error(f"应用字体设置失败: {e}")
+    
+    def apply_theme(self, theme):
         self.recorded_macro = []
         self.recording_start_time = time.time()
         
@@ -5977,8 +6103,136 @@ class CommandSenderApp:
             messagebox.showerror("错误", f"无法重新加载文件: {str(e)}")
             logger.error(f"重新加载文件失败: {str(e)}")
 
+def execute_from_command_line(args):
+    """从命令行执行命令"""
+    import sys
+    import time
+    
+    print("=" * 50)
+    print("   命令发送器 - 命令行执行模式")
+    print("=" * 50)
+    print()
+    
+    if args.no_gui:
+        print("无GUI模式: 将自动选择第一个找到的终端窗口")
+    
+    if args.target_hwnd:
+        print(f"目标窗口句柄: {args.target_hwnd}")
+    else:
+        print("目标窗口: 将自动选择")
+    
+    if args.commands:
+        commands = args.commands.split('|')
+        print(f"命令数量: {len(commands)} 条")
+    elif args.command_set_name:
+        print(f"命令集名称: {args.command_set_name}")
+        commands = None
+    else:
+        print("错误: 未指定要执行的命令")
+        sys.exit(1)
+    
+    print(f"发送延迟: {args.delay} 毫秒")
+    print()
+    print("=" * 50)
+    print()
+    
+    try:
+        import win32gui
+        import win32con
+        import win32api
+        import pyperclip
+        import pyautogui
+        
+        target_hwnd = args.target_hwnd
+        
+        if not target_hwnd:
+            print("正在搜索终端窗口...")
+            
+            found_windows = []
+            
+            def enum_callback(hwnd, windows):
+                if win32gui.IsWindowVisible(hwnd):
+                    title = win32gui.GetWindowText(hwnd)
+                    class_name = win32gui.GetClassName(hwnd)
+                    if title and any(cls in class_name.lower() for cls in ['cmd', 'powershell', 'terminal', 'conhost', 'console']):
+                        windows.append((hwnd, title, class_name))
+                return True
+            
+            win32gui.EnumWindows(enum_callback, found_windows)
+            
+            if not found_windows:
+                print("警告: 未找到终端窗口，将使用剪贴板方式")
+                target_hwnd = 0
+            else:
+                target_hwnd = found_windows[0][0]
+                print(f"找到窗口: {found_windows[0][1]}")
+        
+        if target_hwnd:
+            print(f"正在激活窗口句柄: {target_hwnd}")
+            win32gui.ShowWindow(target_hwnd, win32con.SW_RESTORE)
+            time.sleep(0.3)
+            win32api.SendMessage(target_hwnd, win32con.WM_SETFOCUS)
+            time.sleep(0.2)
+            win32gui.SetForegroundWindow(target_hwnd)
+            time.sleep(0.2)
+        
+        if not commands:
+            print("错误: 命令集未找到或为空")
+            sys.exit(1)
+        
+        for i, cmd in enumerate(commands, 1):
+            print(f"[{i}/{len(commands)}] 发送: {cmd[:60]}..." if len(cmd) > 60 else f"[{i}/{len(commands)}] 发送: {cmd}")
+            
+            pyperclip.copy(cmd)
+            time.sleep(0.1)
+            
+            if target_hwnd:
+                win32api.SendMessage(target_hwnd, 0x0102, 0x56, 0) 
+                pyautogui.hotkey('ctrl', 'v')
+            else:
+                pyautogui.hotkey('ctrl', 'v')
+            
+            time.sleep(0.1)
+            pyautogui.press('enter')
+            time.sleep(args.delay / 1000.0)
+        
+        print()
+        print("=" * 50)
+        print("   所有命令发送完成！")
+        print("=" * 50)
+        
+    except ImportError as e:
+        print(f"错误: 缺少必要的库 - {e}")
+        print("请确保已安装所有依赖库")
+        sys.exit(1)
+    except Exception as e:
+        print(f"错误: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
 def main():
     """主函数"""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='命令发送器')
+    parser.add_argument('--execute-command-set', dest='command_set_name', 
+                       help='执行指定名称的命令集')
+    parser.add_argument('--commands', dest='commands', 
+                       help='要执行的命令（多个命令用|分隔）')
+    parser.add_argument('--hwnd', dest='target_hwnd', type=int,
+                       help='目标窗口句柄')
+    parser.add_argument('--delay', dest='delay', type=int, default=100,
+                       help='发送延迟（毫秒）')
+    parser.add_argument('--no-gui', dest='no_gui', action='store_true',
+                       help='无GUI模式')
+    
+    args = parser.parse_args()
+    
+    if args.command_set_name or args.commands:
+        execute_from_command_line(args)
+        return
+    
     print("进入main函数")
     try:
         print("创建Tk根窗口")

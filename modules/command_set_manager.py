@@ -57,12 +57,19 @@ class CommandSetManager:
         初始化命令集管理器
         
         Args:
-            config_dir: 配置文件目录路径，默认使用程序目录下的config文件夹
+            config_dir: 配置文件目录路径，默认使用用户AppData目录
         """
+        import sys
+        
         if config_dir is None:
-            # 获取程序所在目录
-            program_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            config_dir = os.path.join(program_dir, 'config')
+            # 检测是否在打包环境中运行
+            if getattr(sys, 'frozen', False):
+                # 打包环境：使用用户固定的AppData目录
+                config_dir = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'CmdSender', 'config')
+            else:
+                # 开发环境：使用程序目录下的config文件夹
+                program_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                config_dir = os.path.join(program_dir, 'config')
         
         self.config_dir = config_dir
         self.config_file = os.path.join(config_dir, 'command_sets.json')

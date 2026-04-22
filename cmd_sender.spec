@@ -1,12 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
+block_cipher = None
+
+# 获取程序根目录
+root_dir = os.path.dirname(os.path.abspath(SPEC))
 
 a = Analysis(
     ['complete_command_sender.py'],
-    pathex=[],
+    pathex=[root_dir],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        ('modules', 'modules'),
+        ('cmd_sender.ico', '.'),
+    ],
+    hiddenimports=[
+        'pyautogui',
+        'pyperclip',
+        'serial',
+        'serial.tools.list_ports',
+        'win32gui',
+        'win32con',
+        'win32process',
+        'psutil',
+        'keyboard',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -14,7 +32,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
-pyz = PYZ(a.pure)
+pyz = PYZ(a.pure, cipher=block_cipher)
 
 exe = EXE(
     pyz,
@@ -35,4 +53,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon='cmd_sender.ico',
 )
