@@ -1995,11 +1995,6 @@ class CommandSenderApp:
                                         command=self.command_set_integration.save_selection_as_command_set)
             commandset_menu.add_command(label="管理命令集", 
                                         command=self.command_set_integration.manage_command_sets)
-            commandset_menu.add_separator()
-            commandset_menu.add_command(label="导出到桌面", 
-                                        command=self.command_set_integration.export_command_set_to_desktop)
-            commandset_menu.add_command(label="批量导出到桌面", 
-                                        command=self.command_set_integration.batch_export_to_desktop)
             tools_menu.add_separator()
         
         tools_menu.add_command(label="设置", command=self.show_settings)
@@ -2257,6 +2252,10 @@ class CommandSenderApp:
                                           command=self.quick_save_cmdset, state=tk.DISABLED)
         self.save_cmdset_btn.pack(side=tk.LEFT, padx=5)
         
+        self.delete_cmdset_btn = ttk.Button(control_frame, text="删除命令集", 
+                                           command=self.delete_current_cmdset, state=tk.DISABLED)
+        self.delete_cmdset_btn.pack(side=tk.LEFT, padx=5)
+        
         self.text_editor.bind('<<Selection>>', self.on_text_selection_changed)
         self.text_editor.bind('<KeyRelease>', self.on_text_selection_changed)
         
@@ -2351,6 +2350,8 @@ class CommandSenderApp:
         """命令集选中事件"""
         if hasattr(self, 'send_cmdset_btn'):
             self.send_cmdset_btn.config(state=tk.NORMAL)
+        if hasattr(self, 'delete_cmdset_btn'):
+            self.delete_cmdset_btn.config(state=tk.NORMAL)
     
     def send_current_cmdset(self):
         """发送当前选中的命令集"""
@@ -2358,6 +2359,24 @@ class CommandSenderApp:
         if name and name != "未选择":
             if hasattr(self, 'command_set_integration') and self.command_set_integration:
                 self.command_set_integration.execute_command_set(name)
+    
+    def delete_current_cmdset(self):
+        """删除当前选中的命令集"""
+        name = self.current_cmdset_var.get()
+        if name and name != "未选择":
+            if messagebox.askyesno("确认删除", f"确定要删除命令集 '{name}' 吗？"):
+                if hasattr(self, 'command_set_integration') and self.command_set_integration:
+                    result = self.command_set_integration.command_set_manager.delete_command_set(name)
+                    if result:
+                        messagebox.showinfo("成功", f"命令集 '{name}' 已删除")
+                        self.refresh_cmdset_list()
+                        self.current_cmdset_var.set("未选择")
+                        if hasattr(self, 'send_cmdset_btn'):
+                            self.send_cmdset_btn.config(state=tk.DISABLED)
+                        if hasattr(self, 'delete_cmdset_btn'):
+                            self.delete_cmdset_btn.config(state=tk.DISABLED)
+                    else:
+                        messagebox.showerror("错误", "删除失败")
     
     def create_status_bar(self):
         """创建状态栏"""
@@ -4097,12 +4116,9 @@ class CommandSenderApp:
 • 支持文本编辑
 • 支持最近文件
 • 支持自动保存
-• 支持SecureCRT风格的命令按钮
 • 支持命令集管理功能
   - 保存选中命令为命令集
   - 快速执行命令集
-  - 导出命令集到桌面或指定目录
-  - 支持批量导出
 
 版本号：V0.2
 更新内容：
